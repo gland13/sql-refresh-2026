@@ -189,3 +189,213 @@ ORDER BY
     year ASC,
     s.last_name ASC;
 
+-- Student services needs a complete enrollment status report for all students. For every student in the system, show their name and whether they are 'Enrolled' (has at least one course) or 'Not Enrolled' (no courses registered yet). Order by last name.
+SELECT  s.first_name
+      , s.last_name
+      , CASE  WHEN E.student_id IS NOT NULL THEN 'Enrolled'
+              ELSE 'NOT Enrolled'
+        END AS Status
+FROM students s
+  LEFT JOIN enrollments e
+    ON s.student_id = e.student_id
+GROUP BY  s.first_name
+        , s.last_name
+        , CASE  WHEN E.student_id IS NOT NULL THEN 'Enrolled'
+              ELSE 'NOT Enrolled'
+        END
+ORDER BY s.last_name 
+
+-- UI INSISTED THIS IS THE CORRECT QUERY:
+SELECT
+    s.first_name,
+    s.last_name,
+    CASE
+        WHEN COUNT(e.enrollment_id) > 0 THEN 'Enrolled'
+        ELSE 'Not Enrolled'
+    END AS status
+FROM students s
+LEFT JOIN enrollments e
+    ON s.student_id = e.student_id
+GROUP BY
+    s.first_name,
+    s.last_name
+ORDER BY
+    s.last_name;
+
+-- Calculate each student's GPA by converting letter grades to numeric points and averaging them, along with the number of courses taken.
+SELECT  s.first_name
+      , s.last_name
+      , s.major
+      , AVG(
+            CASE 
+              WHEN e.grade = 'A' THEN 4.0
+              WHEN e.grade = 'A-' THEN 3.7
+              WHEN e.grade = 'B+' THEN 3.3
+              WHEN e.grade = 'B' THEN 3.0
+              ELSE 0.0
+            END
+                    ) AS gpa
+      , COUNT(e.enrollment_id) AS courses_taken
+FROM students s
+  LEFT JOIN enrollments e
+    ON s.student_id = e.student_id
+GROUP BY
+        s.student_id
+      , s.first_name
+      , s.last_name
+      , s.major
+ORDER BY
+  gpa DESC
+
+-- The honors office wants to rank all students by their GPA to identify top performers. Calculate each student's GPA and rank them from highest to lowest. Show first name, last name, rounded GPA (2 decimals), and their rank. Grade scale: A=4.0, A-=3.7, B+=3.3, B=3.0.
+
+WITH gpa_per AS
+(
+SELECT  s.first_name
+      , s.last_name
+      , AVG ( CASE
+                  WHEN e.grade = 'A' THEN 4.0
+                  WHEN e.grade = 'A-' THEN 3.7
+                  WHEN e.grade = 'B+' THEN 3.3
+                  WHEN e.grade = 'B' THEN 3.0
+                  ELSE 0.0
+              END
+             ) AS gpa
+FROM students s
+ LEFT JOIN enrollments e
+    ON s.student_id = e.student_id
+GROUP BY 
+  s.student_id
+  , s.first_name
+  , s.last_name
+)
+SELECT  first_name
+      , last_name
+      , ROUND(gpa, 2) AS gpa
+      , RANK() OVER (ORDER BY gpa DESC) gpa_rank
+FROM gpa_per
+WHERE gpa > 0
+ORDER BY
+  gpa DESC,
+  last_name;
+
+-- The academic support team wants to identify students who are underperforming relative to their classmates in the same course. Find all enrollments where the student's grade points are strictly below the average grade points for that course. Show student name, course name, and grade.
+SELECT
+    s.first_name,
+    s.last_name,
+    c.course_name,
+    e.grade
+FROM students s
+JOIN enrollments e
+    ON s.student_id = e.student_id
+JOIN courses c
+    ON e.course_id = c.course_id
+WHERE
+    CASE
+        WHEN e.grade = 'A'  THEN 4.0
+        WHEN e.grade = 'A-' THEN 3.7
+        WHEN e.grade = 'B+' THEN 3.3
+        WHEN e.grade = 'B'  THEN 3.0
+        ELSE 0.0
+    END < (
+        SELECT AVG(
+            CASE
+                WHEN e2.grade = 'A'  THEN 4.0
+                WHEN e2.grade = 'A-' THEN 3.7
+                WHEN e2.grade = 'B+' THEN 3.3
+                WHEN e2.grade = 'B'  THEN 3.0
+                ELSE 0.0
+            END
+        )
+        FROM enrollments e2
+        WHERE e2.course_id = e.course_id
+    )
+ORDER BY
+    s.last_name,
+    c.course_name;
+
+-- The university wants to recognize the professor with the broadest student reach. Find the professor who has taught the most distinct students across all their courses. Show first name, last name, department, and student_count.
+SELECT TOP 1
+    p.first_name,
+    p.last_name,
+    p.department,
+    COUNT(DISTINCT e.student_id) AS student_count
+FROM professors p
+JOIN courses c
+    ON p.professor_id = c.professor_id
+JOIN enrollments e
+    ON c.course_id = e.course_id
+GROUP BY
+    p.first_name,
+    p.last_name,
+    p.department
+ORDER BY
+    student_count DESC;
+
+--The academic board needs a high-level summary of student performance across the cohort. Classify each enrolled student's GPA into bands — Distinction (GPA ≥ 3.7), Merit (GPA ≥ 3.0), Pass (below 3.0) — then show how many students are in each band and their average GPA. Grade scale: A=4.0, A-=3.7, B+=3.3, B=3.0.
+WITH gpa_per_student AS (
+    SELECT
+        s.student_id,
+        AVG(
+            CASE
+                WHEN e.grade = 'A'  THEN 4.0
+                WHEN e.grade = 'A-' THEN 3.7
+                WHEN e.grade = 'B+' THEN 3.3
+                WHEN e.grade = 'B'  THEN 3.0
+                ELSE 0.0
+            END
+        ) AS gpa
+    FROM students s
+    JOIN enrollments e
+        ON s.student_id = e.student_id
+    GROUP BY
+        s.student_id
+),
+banded AS (
+    SELECT
+        student_id,
+        gpa,
+        CASE
+            WHEN gpa >= 3.7 THEN 'Distinction'
+            WHEN gpa >= 3.0 THEN 'Merit'
+            ELSE 'Pass'
+        END AS grade_band
+    FROM gpa_per_student
+)
+SELECT
+    grade_band,
+    COUNT(*) AS student_count,
+    ROUND(AVG(gpa), 2) AS avg_gpa
+FROM banded
+GROUP BY grade_band
+ORDER BY grade_band;
+
+--The academic support team wants to identify students carrying above-average credit loads who may need extra support. Find all enrolled students whose total credits exceed the average total credits among all enrolled students. Show first name, last name, major, and total_credits. Order by total_credits descending.
+
+WITH credits_per_student AS (
+    SELECT
+        s.student_id,
+        s.first_name,
+        s.last_name,
+        s.major,
+        SUM(c.credits) AS total_credits
+    FROM students s
+    JOIN enrollments e
+        ON s.student_id = e.student_id
+    JOIN courses c
+        ON e.course_id = c.course_id
+    GROUP BY
+        s.student_id,
+        s.first_name,
+        s.last_name,
+        s.major
+)
+SELECT
+    first_name,
+    last_name,
+    major,
+    total_credits
+FROM credits_per_student
+WHERE total_credits >
+    (SELECT AVG(total_credits) FROM credits_per_student)
+ORDER BY total_credits DESC;
